@@ -1,4 +1,6 @@
 // server.js - Backend TVNAdrenaline (Node.js + Express + MySQL) - FIXED VERSION
+const { router: paymentRouter, setPool: setPaymentPool } = require('./routes/payment.routes');
+const SessionService = require('./services/session.service');
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -22,6 +24,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'tvnadrenaline_super_secret_2025';
 app.use(cors());
 app.use(express.json());
 
+
 // MySQL Connection Pool
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
@@ -33,6 +36,11 @@ const pool = mysql.createPool({
   queueLimit: 0
 });
 
+// Khởi tạo SessionService
+const sessionService = new SessionService(pool);
+
+setPaymentPool(pool);
+
 // ==================== WEBSOCKET SETUP ====================
 const clients = new Map(); // userId -> { ws, role, centerId }
 
@@ -41,37 +49,79 @@ wss.on('connection', (ws, req) => {
 
   let userId = null;
   let userRole = null;
+  let sessionId = null;
 
   ws.isAlive = true;
-
-  // Ping-pong để giữ kết nối sống
   ws.on('pong', () => { ws.isAlive = true; });
 
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
 
-      // Xác thực token khi client gửi
-      if (data.type === 'auth' && data.token) {
+      // Xác thực token + session khi client gửi
+      if (data.type === 'auth' && data.token && data.sessionToken && data.deviceId) {
+        // 1. Verify JWT
         jwt.verify(data.token, JWT_SECRET, async (err, user) => {
           if (err) {
-            ws.send(JSON.stringify({ type: 'auth_failed', error: 'Token không hợp lệ' }));
+            ws.send(JSON.stringify({
+              type: 'auth_failed',
+              error: 'Token không hợp lệ'
+            }));
             ws.close();
             return;
           }
 
+          // 2. Verify Session
+          const sessionData = await sessionService.verifySession(
+            data.sessionToken,
+            data.deviceId
+          );
+
+          if (!sessionData || sessionData.userId !== user.id) {
+            ws.send(JSON.stringify({
+              type: 'auth_failed',
+              error: 'Session không hợp lệ hoặc đã hết hạn'
+            }));
+            ws.close();
+            return;
+          }
+
+          // ✅ 3. KIỂM TRA THIẾT BỊ CŨ ĐÃ KẾT NỐI CHƯA
+          const oldClient = clients.get(user.id);
+          if (oldClient?.ws.readyState === WebSocket.OPEN) {
+            // Đẩy thiết bị cũ ra
+            oldClient.ws.send(JSON.stringify({
+              type: 'force_logout',
+              message: 'Tài khoản của bạn đã đăng nhập từ thiết bị khác'
+            }));
+            oldClient.ws.close();
+            clients.delete(user.id);
+            console.log(`Kicked out old WebSocket for user ${user.id}`);
+          }
+
           userId = user.id;
           userRole = user.role;
+          sessionId = sessionData.sessionId;
 
           let centerId = null;
           if (userRole === 'staff' || userRole === 'admin') {
-            const [rows] = await pool.query('SELECT centerId FROM Users WHERE id = ?', [userId]);
+            const [rows] = await pool.query(
+              'SELECT centerId FROM Users WHERE id = ?',
+              [userId]
+            );
             if (rows[0]?.centerId) centerId = rows[0].centerId;
           }
 
-          clients.set(userId, { ws, role: userRole, centerId });
-          ws.send(JSON.stringify({ type: 'auth_success', userId, role: userRole }));
-          console.log(`User ${userId} (${userRole}) đã kết nối WebSocket`);
+          // ✅ Lưu client mới
+          clients.set(userId, { ws, role: userRole, centerId, sessionId });
+
+          ws.send(JSON.stringify({
+            type: 'auth_success',
+            userId,
+            role: userRole
+          }));
+
+          console.log(`✅ User ${userId} (${userRole}) connected via WebSocket`);
         });
       }
 
@@ -79,6 +129,7 @@ wss.on('connection', (ws, req) => {
       if (data.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
       }
+
     } catch (err) {
       console.error('WebSocket message error:', err);
     }
@@ -87,11 +138,14 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => {
     if (userId) {
       clients.delete(userId);
-      console.log(`User ${userId} ngắt kết nối WebSocket`);
+      console.log(`User ${userId} disconnected from WebSocket`);
     }
   });
 });
 
+setInterval(() => {
+  sessionService.cleanupExpiredSessions();
+}, 60 * 60 * 1000);
 
 // Heartbeat: Dọn client chết mỗi 30s
 setInterval(() => {
@@ -229,33 +283,123 @@ app.post('/api/auth/register', async (req, res) => {
 });
 
 app.post('/api/auth/login', async (req, res) => {
-  const { emailOrPhone, password } = req.body;
+  const { emailOrPhone, password, deviceId, userAgent, ipAddress } = req.body;
+  
   try {
     const [rows] = await pool.execute(
       `SELECT * FROM Users WHERE email = ? OR phone = ?`,
       [emailOrPhone, emailOrPhone]
     );
     const user = rows[0];
+    
     if (!user || !await bcrypt.compare(password, user.password)) {
       return res.status(401).json({ message: 'Sai email/số điện thoại hoặc mật khẩu' });
     }
-    if (!user.isActive) return res.status(403).json({ message: 'Tài khoản bị khóa' });
+    
+    if (!user.isActive) {
+      return res.status(403).json({ message: 'Tài khoản bị khóa' });
+    }
 
+    // ✅ TẠO JWT TOKEN
     const token = jwt.sign(
       { id: user.id, role: user.role, name: user.name },
       JWT_SECRET,
       { expiresIn: 7 * 24 * 60 * 60 }
     );
 
+    // ✅ TẠO SESSION MỚI (sẽ tự động kick session cũ)
+    const deviceInfo = {
+      deviceId: deviceId || req.headers['x-device-id'] || 'unknown',
+      userAgent: userAgent || req.headers['user-agent'] || 'unknown',
+      ipAddress: ipAddress || req.ip || req.connection.remoteAddress || '0.0.0.0'
+    };
+
+    const { sessionToken, expiresAt } = await sessionService.createSession(
+      user.id,
+      deviceInfo
+    );
+
+    // ✅ GỬI THÔNG BÁO ĐẨY THIẾT BỊ CŨ RA (nếu có)
+    const oldClient = clients.get(user.id);
+    if (oldClient?.ws.readyState === WebSocket.OPEN) {
+      oldClient.ws.send(JSON.stringify({
+        type: 'force_logout',
+        message: 'Tài khoản của bạn đã đăng nhập từ thiết bị khác'
+      }));
+      oldClient.ws.close();
+      clients.delete(user.id);
+      console.log(`🚫 Kicked out old device for user ${user.id}`);
+    }
+
     res.json({
       message: 'Đăng nhập thành công',
       token,
-      user: { id: user.id, name: user.name, role: user.role, phone: user.phone }
+      sessionToken, // ✅ Gửi sessionToken cho client
+      expiresAt,
+      user: {
+        id: user.id,
+        name: user.name,
+        role: user.role,
+        phone: user.phone
+      }
     });
+
   } catch (err) {
+    console.error('Login error:', err);
     res.status(500).json({ message: 'Lỗi server' });
   }
 });
+
+app.post('/api/auth/logout', authenticateToken, async (req, res) => {
+  const { sessionToken, deviceId } = req.body;
+  
+  try {
+    // Xóa session
+    await sessionService.deleteSession(
+      sessionToken,
+      deviceId || req.headers['x-device-id'] || 'unknown'
+    );
+
+    // Ngắt WebSocket
+    const client = clients.get(req.user.id);
+    if (client?.ws.readyState === WebSocket.OPEN) {
+      client.ws.close();
+      clients.delete(req.user.id);
+    }
+
+    res.json({ message: 'Đăng xuất thành công' });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi đăng xuất' });
+  }
+});
+
+app.get('/api/my/sessions', authenticateToken, async (req, res) => {
+  try {
+    const sessions = await sessionService.getActiveSessions(req.user.id);
+    res.json(sessions);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Đăng xuất tất cả thiết bị
+app.post('/api/auth/logout-all', authenticateToken, async (req, res) => {
+  try {
+    await sessionService.deleteAllSessions(req.user.id);
+
+    // Kick WebSocket
+    const client = clients.get(req.user.id);
+    if (client?.ws.readyState === WebSocket.OPEN) {
+      client.ws.close();
+      clients.delete(req.user.id);
+    }
+
+    res.json({ message: 'Đã đăng xuất tất cả thiết bị' });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi đăng xuất' });
+  }
+});
+
 
 // ====================== PUBLIC ROUTES ======================
 app.get('/api/centers', async (req, res) => {
@@ -517,7 +661,7 @@ app.post('/api/bookings', authenticateToken, async (req, res) => {
     // ✅ CẬP NHẬT SLOT CHO TẤT CẢ CLIENT
     broadcastSlotUpdate(centerId, slot.slotDate);
 
-    res.json({ message: 'Đặt lịch thành công!', bookingCode });
+    res.json({ message: 'Đặt lịch thành công!', bookingCode, bookingId  });
   } catch (err) {
     await connection.rollback();
     console.error('Lỗi đặt lịch:', err);
@@ -1659,6 +1803,8 @@ app.get('/api/staff/search', authenticateToken, authorizeRole('staff', 'admin'),
     res.status(500).json({ message: err.message });
   }
 });
+
+app.use('/api/payment', paymentRouter);
 
 // ====================== START SERVER ======================
 server.listen(PORT, () => {

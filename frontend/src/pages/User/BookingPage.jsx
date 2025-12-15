@@ -1,9 +1,8 @@
-// src/pages/QuickBookingPage.js - PHIÊN BẢN HOÀN CHỈNH 100% (copy là chạy)
-
+// src/pages/BookingPage.js - FIXED VERSION với logic khóa slot hoàn chỉnh
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import {
-  Calendar, MapPin, Clock, Shield, ChevronRight,
+import { useNavigate } from 'react-router-dom';
+import { 
+  Calendar, MapPin, Clock, Shield, ChevronRight, 
   AlertCircle, CheckCircle, Baby, ChevronLeft, Loader2,
   Phone, DollarSign, Sparkles, Heart
 } from 'lucide-react';
@@ -17,22 +16,19 @@ import toast from 'react-hot-toast';
 const getVietnamDate = (offset = 0) => {
   const date = new Date();
   date.setDate(date.getDate() + offset);
-  const vietnamOffset = 7 * 60 * 60 * 1000;
+  const vietnamOffset = 7 * 60 * 60 * 1000; // +7 giờ
   const vietnamTime = new Date(date.getTime() + vietnamOffset);
   return vietnamTime.toISOString().split('T')[0];
 };
 
-export default function QuickBookingPage() {
+export default function BookingPage() {
   const navigate = useNavigate();
-  const { centerId } = useParams(); // Lấy từ URL: /booking/5
-
   const [user, setUser] = useState(null);
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [reservingSlot, setReservingSlot] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
 
   const [centers, setCenters] = useState([]);
   const [vaccines, setVaccines] = useState([]);
@@ -41,16 +37,12 @@ export default function QuickBookingPage() {
 
   const [form, setForm] = useState({
     childName: '', childBirthDate: '', childGender: 'nam',
-    parentName: '', parentPhone: '',
-    centerId: '',
-    vaccineId: '',
-    selectedDate: getVietnamDate(1),
-    timeSlotId: '',
-    doseNumber: 1,
-    notes: ''
+    parentName: '', parentPhone: '', centerId: '', vaccineId: '',
+    selectedDate: getVietnamDate(1), // mặc định ngày mai
+    timeSlotId: '', doseNumber: 1, notes: ''
   });
 
-  // ==================== LOAD USER & GÁN CENTERID NGAY KHI VÀO TRANG ====================
+  // ==================== LOAD USER & DATA ====================
   useEffect(() => {
     const currentUser = getCurrentUser();
     if (!isLoggedIn() || !currentUser) {
@@ -62,12 +54,11 @@ export default function QuickBookingPage() {
     setForm(prev => ({
       ...prev,
       parentName: currentUser.name || '',
-      parentPhone: currentUser.phone || '',
-      centerId: centerId || ''
+      parentPhone: currentUser.phone || ''
     }));
 
     loadInitialData();
-  }, [navigate, centerId]);
+  }, [navigate]);
 
   const loadInitialData = async () => {
     setLoading(true);
@@ -87,56 +78,70 @@ export default function QuickBookingPage() {
 
   // ==================== LOAD SLOTS ====================
   const loadTimeSlots = useCallback(async (centerId, date) => {
-    if (!centerId || !date) return;
-    setLoadingSlots(true);
-    try {
-      const res = await userAPI.getAvailableSlots(centerId, date);
-      setTimeSlots(res.data || []);
-    } catch (err) {
-      toast.error('Không tải được khung giờ');
-      setTimeSlots([]);
-    } finally {
-      setLoadingSlots(false);
+  console.log('[FRONTEND] Đang gọi loadTimeSlots:', { centerId, date });
+
+  setLoadingSlots(true);
+  try {
+    const res = await userAPI.getAvailableSlots(centerId, date);
+    console.log('[FRONTEND] Nhận được từ server:', res.data);
+    
+    if (res.data && res.data.length > 0) {
+      console.log('Các khung giờ:', res.data.map(s => s.slotTime.slice(0,5)).join(', '));
+    } else {
+      console.log('Không có slot nào trả về');
     }
-  }, []);
+
+    setTimeSlots(res.data || []);
+  } catch (err) {
+    console.error('[FRONTEND] Lỗi gọi API:', err);
+    toast.error('Không tải được khung giờ: ' + err.message);
+    setTimeSlots([]);
+  } finally {
+    setLoadingSlots(false);
+  }
+}, [form.timeSlotId]);
 
   useEffect(() => {
     if (form.centerId && form.selectedDate) {
       loadTimeSlots(form.centerId, form.selectedDate);
+    } else {
+      setTimeSlots([]);
     }
   }, [form.centerId, form.selectedDate, loadTimeSlots]);
 
-  // ==================== WEBSOCKET REALTIME ====================
+  // ==================== WEBSOCKET ====================
   const handleRealtime = useCallback((msg) => {
     if (msg.type === 'slots_updated' && msg.centerId == form.centerId && msg.date === form.selectedDate) {
       loadTimeSlots(form.centerId, form.selectedDate);
-      toast('Khung giờ vừa được cập nhật!', { icon: 'Refresh' });
+      toast('Khung giờ vừa thay đổi!', { icon: 'Refresh' });
     }
     if (msg.type === 'injection_completed') {
-      toast.success('Bé đã tiêm xong, chúc bé khỏe!', { icon: 'Heart', duration: 8000 });
+      toast.success('Bé đã được tiêm thành công!', { icon: 'Heart', duration: 8000 });
     }
   }, [form.centerId, form.selectedDate, loadTimeSlots]);
 
   useEffect(() => {
     realtime.on('message', handleRealtime);
-    return () => realtime.off('message', handleRealtime);
+    return () => realtime.off('message');
   }, [handleRealtime]);
 
-  // ==================== VALIDATION & NAVIGATION ====================
+  // ==================== HÀM CHUYỂN BƯỚC ====================
   const validateStep = () => {
     if (step === 1) {
-      if (!form.childName.trim()) return setError('Vui lòng nhập tên bé'), false;
-      if (!form.childBirthDate) return setError('Vui lòng chọn ngày sinh bé'), false;
-      if (!form.parentName.trim()) return setError('Vui lòng nhập tên phụ huynh'), false;
-      if (!form.parentPhone.trim()) return setError('Vui lòng nhập số điện thoại'), false;
-      if (!/(84|0[3|5|7|8|9])+([0-9]{8})\b/.test(form.parentPhone.replace(/\s/g, '')))
+      if (!form.childName.trim()) return setError('Nhập tên bé'), false;
+      if (!form.childBirthDate) return setError('Chọn ngày sinh'), false;
+      if (!form.parentName.trim()) return setError('Nhập tên phụ huynh'), false;
+      if (!form.parentPhone.trim()) return setError('Nhập số điện thoại'), false;
+      if (!/(84|0[3|5|7|8|9])+([0-9]{8})\b/.test(form.parentPhone))
         return setError('Số điện thoại không hợp lệ'), false;
     }
     if (step === 2) {
-      if (!form.vaccineId) return setError('Vui lòng chọn vắc-xin'), false;
+      if (!form.centerId) return setError('Chọn cơ sở tiêm'), false;
+      if (!form.vaccineId) return setError('Chọn vắc-xin'), false;
     }
     if (step === 3) {
-      if (!form.timeSlotId) return setError('Vui lòng chọn khung giờ'), false;
+      if (!form.selectedDate) return setError('Chọn ngày tiêm'), false;
+      if (!form.timeSlotId) return setError('Chọn khung giờ'), false;
     }
     setError('');
     return true;
@@ -152,10 +157,10 @@ export default function QuickBookingPage() {
     try {
       await userAPI.reserveSlot(slotId);
       setForm(prev => ({ ...prev, timeSlotId: slotId }));
-      toast.success('Đã giữ khung giờ trong 10 phút!', { icon: 'Lock' });
+      toast.success('Đã giữ khung giờ 10 phút!', { icon: 'Lock' });
       loadTimeSlots(form.centerId, form.selectedDate);
     } catch (err) {
-      toast.error(err.message || 'Không thể giữ khung giờ này');
+      toast.error(err.message || 'Không giữ được khung giờ');
     } finally {
       setReservingSlot(false);
     }
@@ -167,99 +172,93 @@ export default function QuickBookingPage() {
   };
 
   const handleSubmit = async () => {
-    if (!validateStep()) return;
-    setSubmitting(true);
-    try {
-      await userAPI.createBooking({
-        childName: form.childName.trim(),
-        childBirthDate: form.childBirthDate,
-        childGender: form.childGender,
-        parentName: form.parentName.trim(),
-        parentPhone: form.parentPhone.trim(),
-        vaccineId: parseInt(form.vaccineId),
-        doseNumber: parseInt(form.doseNumber),
-        centerId: parseInt(form.centerId),
-        timeSlotId: parseInt(form.timeSlotId),
-        notes: form.notes.trim() || undefined
-      });
-      setSuccess(true);
-      toast.success('Đặt lịch thành công!', { duration: 5000 });
-      setTimeout(() => navigate('/my-bookings'), 3000);
-    } catch (err) {
-      toast.error(err.message || 'Đặt lịch thất bại, vui lòng thử lại');
-      loadTimeSlots(form.centerId, form.selectedDate); // refresh slot nếu lỗi
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  if (!validateStep()) return;
+  setSubmitting(true);
+  try {
+    const res = await userAPI.createBooking({
+      childName: form.childName.trim(),
+      childBirthDate: form.childBirthDate,
+      childGender: form.childGender,
+      parentName: form.parentName.trim(),
+      parentPhone: form.parentPhone.trim(),
+      vaccineId: parseInt(form.vaccineId),
+      doseNumber: parseInt(form.doseNumber),
+      centerId: parseInt(form.centerId),
+      timeSlotId: parseInt(form.timeSlotId),
+      notes: form.notes.trim() || undefined
+    });
 
-  // ==================== DỮ LIỆU HIỂN THỊ ====================
+    // Lấy bookingId từ response
+    const bookingId = res.data?.bookingId || res.data?.id;
+    
+    if (!bookingId) {
+      throw new Error('Không nhận được mã đặt lịch');
+    }
+
+    toast.success('Đặt lịch thành công! Chuyển sang thanh toán...', { duration: 2000 });
+    
+    // ✅ CHUYỂN SANG TRANG THANH TOÁN
+    setTimeout(() => {
+      navigate(`/payment/${bookingId}`);
+    }, 1500);
+
+  } catch (err) {
+    toast.error(err.message || 'Đặt lịch thất bại');
+    loadTimeSlots(form.centerId, form.selectedDate);
+  } finally {
+    setSubmitting(false);
+  }
+};
+
+  // ==================== RENDER ====================
   const selectedCenter = centers.find(c => c.id == form.centerId);
   const selectedVaccine = vaccines.find(v => v.id == form.vaccineId);
   const selectedSlot = timeSlots.find(s => s.id == form.timeSlotId);
 
-  // ==================== TRƯỜNG HỢP THÀNH CÔNG ====================
-  if (success) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-teal-50 to-blue-50 flex items-center justify-center p-6">
-        <div className="bg-white rounded-3xl shadow-2xl p-16 text-center max-w-2xl w-full">
-          <CheckCircle className="w-32 h-32 text-green-600 mx-auto mb-6" />
-          <h1 className="text-5xl font-bold mb-4">Đặt lịch thành công!</h1>
-          <p className="text-2xl text-teal-600 font-bold mb-8">
-            {selectedSlot && new Date(selectedSlot.slotDate).toLocaleDateString('vi-VN', {
-              weekday: 'long',
-              day: 'numeric',
-              month: 'long',
-              year: 'numeric'
-            })}{' lúc '}{selectedSlot?.slotTime.slice(0,5)}
-          </p>
-          <p className="text-gray-600">Đang chuyển đến lịch của bạn...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // ==================== RENDER CHÍNH ====================
   return (
     <div className="min-h-screen bg-gray-50">
       <Header />
 
-      {/* HERO + PROGRESS BAR */}
+      {/* Hero + Progress Bar */}
       <div className="bg-gradient-to-br from-teal-500 via-cyan-600 to-blue-600 py-12">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="text-center mb-10">
             <div className="inline-flex items-center gap-2 bg-white/20 px-4 py-2 rounded-full mb-4">
               <Sparkles className="w-4 h-4 text-yellow-300" />
-              <span className="text-white font-medium">Đặt nhanh chỉ 20 giây</span>
+              <span className="text-white font-medium">Đặt lịch chỉ 30 giây</span>
             </div>
             <h1 className="text-4xl md:text-5xl font-bold text-white mb-3">
-              <br className="md:hidden" /> 📍{selectedCenter?.name || 'cơ sở'}
+              Đặt lịch tiêm chủng
             </h1>
             <p className="text-white/90 text-lg">An toàn • Nhanh chóng • Miễn phí</p>
           </div>
-
+          
           <div className="flex items-center justify-center gap-4 md:gap-8">
             {[
               { num: 1, label: 'Thông tin' },
-              { num: 2, label: 'Vắc-xin' },
+              { num: 2, label: 'Dịch vụ' },
               { num: 3, label: 'Ngày giờ' },
               { num: 4, label: 'Xác nhận' }
             ].map((s, i) => (
               <div key={s.num} className="flex items-center">
                 <div className="flex flex-col items-center">
-                  <div className={`w-12 h-12 md:w-16 md:h-16 rounded-full flex items-center justify-center text-lg md:text-2xl font-bold transition-all ${
-                    step >= s.num
-                      ? 'bg-white text-teal-600 shadow-2xl scale-110'
+                  <div className={`w-12 h-12 md:w-16 md:h-16 rounded-full flex items-center justify-center text-lg md:text-2xl font-bold transition-all duration-500 ${
+                    step >= s.num 
+                      ? 'bg-white text-teal-600 shadow-2xl scale-110' 
                       : 'bg-white/30 text-white/70'
                   }`}>
                     {step > s.num ? <CheckCircle className="w-6 h-6 md:w-8 md:h-8" /> : s.num}
                   </div>
-                  <p className={`text-xs md:text-sm font-medium mt-2 hidden md:block ${step >= s.num ? 'text-yellow-300' : 'text-white/70'}`}>
+                  <p className={`text-xs md:text-sm font-medium mt-2 hidden md:block ${
+                    step >= s.num ? 'text-yellow-300' : 'text-white/70'
+                  }`}>
                     {s.label}
                   </p>
                 </div>
                 {i < 3 && (
-                  <div className={`w-8 md:w-20 h-1 mx-2 ${step > s.num ? 'bg-white' : 'bg-white/30'}`} />
+                  <div className={`w-8 md:w-20 h-1 mx-2 transition-all duration-500 ${
+                    step > s.num ? 'bg-white' : 'bg-white/30'
+                  }`} />
                 )}
               </div>
             ))}
@@ -267,8 +266,9 @@ export default function QuickBookingPage() {
         </div>
       </div>
 
-      {/* MAIN FORM */}
+      {/* Form Container */}
       <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 md:py-12">
+        {/* Error Message */}
         {error && (
           <div className="mb-6 p-5 bg-red-50 border-2 border-red-200 rounded-2xl flex items-center gap-3 text-red-700 shadow-lg animate-shake">
             <AlertCircle className="w-6 h-6 flex-shrink-0" />
@@ -277,90 +277,187 @@ export default function QuickBookingPage() {
         )}
 
         <div className="bg-white rounded-3xl shadow-2xl p-6 md:p-10">
-
-          {/* BƯỚC 1: THÔNG TIN BÉ */}
+          {/* STEP 1: THÔNG TIN BÉ */}
           {step === 1 && (
             <div className="space-y-8">
               <div className="text-center">
                 <div className="w-20 h-20 bg-gradient-to-br from-teal-100 to-cyan-100 rounded-3xl flex items-center justify-center mx-auto mb-4">
                   <Baby className="w-12 h-12 text-teal-600" />
                 </div>
-                <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-2">Thông tin bé yêu</h2>
-                <p className="text-gray-600">Điền đầy đủ để đặt lịch nhanh hơn</p>
+                <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-2">
+                  Thông tin bé yêu
+                </h2>
+                <p className="text-gray-600">Điền thông tin chính xác để đặt lịch</p>
               </div>
 
               <div className="grid md:grid-cols-2 gap-5">
-                {/* Giống hệt BookingPage */}
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Họ tên bé <span className="text-red-500">*</span></label>
-                  <input type="text" placeholder="Nguyễn Văn A" value={form.childName} onChange={e => handleChange('childName', e.target.value)}
-                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 focus:ring-4 focus:ring-teal-100 outline-none" />
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Họ tên bé <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Nguyễn Văn A"
+                    value={form.childName}
+                    onChange={e => handleChange('childName', e.target.value)}
+                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 focus:ring-4 focus:ring-teal-100 outline-none transition"
+                  />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Ngày sinh <span className="text-red-500">*</span></label>
-                  <input type="date" value={form.childBirthDate} onChange={e => handleChange('childBirthDate', e.target.value)}
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Ngày sinh <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={form.childBirthDate}
+                    onChange={e => handleChange('childBirthDate', e.target.value)}
                     max={new Date().toISOString().split('T')[0]}
-                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 focus:ring-4 focus:ring-teal-100 outline-none" />
+                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 focus:ring-4 focus:ring-teal-100 outline-none"
+                  />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Giới tính</label>
-                  <select value={form.childGender} onChange={e => handleChange('childGender', e.target.value)}
-                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 outline-none">
-                    <option value="nam">Bé trai</option>
-                    <option value="nữ">Bé gái</option>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Giới tính
+                  </label>
+                  <select
+                    value={form.childGender}
+                    onChange={e => handleChange('childGender', e.target.value)}
+                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 outline-none"
+                  >
+                    <option value="nam">Bé trai 👦</option>
+                    <option value="nữ">Bé gái 👧</option>
                     <option value="khác">Khác</option>
                   </select>
                 </div>
+
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Mũi thứ</label>
-                  <input type="number" min="1" max="10" value={form.doseNumber} onChange={e => handleChange('doseNumber', e.target.value)}
-                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 outline-none" />
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Mũi thứ
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={form.doseNumber}
+                    onChange={e => handleChange('doseNumber', e.target.value)}
+                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 outline-none"
+                  />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Họ tên phụ huynh <span className="text-red-500">*</span></label>
-                  <input type="text" placeholder="Nguyễn Thị B" value={form.parentName} onChange={e => handleChange('parentName', e.target.value)}
-                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 focus:ring-4 focus:ring-teal-100 outline-none" />
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Họ tên phụ huynh <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Nguyễn Thị B"
+                    value={form.parentName}
+                    onChange={e => handleChange('parentName', e.target.value)}
+                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 focus:ring-4 focus:ring-teal-100 outline-none"
+                  />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Số điện thoại <span className="text-red-500">*</span></label>
-                  <input type="tel" placeholder="0987654321" value={form.parentPhone} onChange={e => handleChange('parentPhone', e.target.value)}
-                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 focus:ring-4 focus:ring-teal-100 outline-none" />
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Số điện thoại <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="tel"
+                    placeholder="0987654321"
+                    value={form.parentPhone}
+                    onChange={e => handleChange('parentPhone', e.target.value)}
+                    className="w-full px-5 py-4 text-lg border-2 border-gray-200 rounded-2xl focus:border-teal-500 focus:ring-4 focus:ring-teal-100 outline-none"
+                  />
                 </div>
               </div>
 
-              <button onClick={nextStep}
-                className="w-full bg-gradient-to-r from-teal-600 to-cyan-600 text-white py-5 rounded-2xl font-bold text-xl hover:shadow-2xl transition transform hover:-translate-y-1 flex items-center justify-center gap-3">
+              <button
+                onClick={nextStep}
+                className="w-full bg-gradient-to-r from-teal-600 to-cyan-600 text-white py-5 rounded-2xl font-bold text-xl hover:shadow-2xl transition transform hover:-translate-y-1 flex items-center justify-center gap-3"
+              >
                 Tiếp tục <ChevronRight className="w-6 h-6" />
               </button>
             </div>
           )}
 
-          {/* BƯỚC 2: CHỌN VẮC-XIN */}
+          {/* STEP 2: CHỌN CƠ SỞ & VẮC-XIN */}
           {step === 2 && (
             <div className="space-y-8">
-              <div className="text-center mb-8">
-                <div className="flex items-center justify-center gap-4 mb-6">
-                  <MapPin className="w-12 h-12 text-teal-600" />
-                  <div>
-                    <h2 className="text-3xl md:text-4xl font-bold text-gray-900">{selectedCenter?.name}</h2>
-                    <p className="text-gray-600">{selectedCenter?.address}</p>
-                  </div>
-                </div>
-                <p className="text-lg text-gray-600">Chỉ cần chọn loại vắc-xin bạn muốn tiêm</p>
+              <div className="text-center mb-6">
+                <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-2">
+                  Chọn cơ sở & vắc-xin
+                </h2>
+                <p className="text-gray-600">Chọn địa điểm và loại vắc-xin phù hợp</p>
               </div>
 
+              {/* Cơ sở tiêm */}
               <div>
-                <label className="block text-xl font-bold mb-6 flex items-center gap-2">
-                  <Shield className="w-7 h-7 text-teal-600" />
-                  Chọn vắc-xin <span className="text-red-500">*</span>
+                <label className="block text-xl font-bold mb-4 flex items-center gap-2">
+                  <MapPin className="w-6 h-6 text-teal-600" />
+                  Cơ sở tiêm chủng <span className="text-red-500">*</span>
                 </label>
-
                 {loading ? (
-                  <div className="text-center py-12"><Loader2 className="w-12 h-12 animate-spin mx-auto text-teal-600" /></div>
-                ) : vaccines.length === 0 ? (
-                  <div className="text-center py-12 text-gray-500">Không có vắc-xin nào</div>
+                  <div className="text-center py-8">
+                    <Loader2 className="w-8 h-8 animate-spin mx-auto text-teal-600" />
+                    <p className="text-gray-500 mt-2">Đang tải...</p>
+                  </div>
+                ) : centers.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    Không có cơ sở nào
+                  </div>
                 ) : (
-                  <div className="grid md:grid-cols-2 gap-5">
+                  <div className="grid md:grid-cols-2 gap-4">
+                    {centers.map(c => (
+                      <div
+                        key={c.id}
+                        onClick={() => handleChange('centerId', c.id)}
+                        className={`p-6 border-3 rounded-2xl cursor-pointer transition-all transform hover:scale-105 ${
+                          form.centerId == c.id
+                            ? 'border-teal-500 bg-teal-50 shadow-xl ring-4 ring-teal-200'
+                            : 'border-teal-400 hover:border-teal-300 hover:shadow-lg'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                            form.centerId == c.id ? 'bg-teal-600' : 'bg-teal-100'
+                          }`}>
+                            <MapPin className={`w-6 h-6 ${
+                              form.centerId == c.id ? 'text-white' : 'text-teal-600'
+                            }`} />
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="text-lg font-bold text-gray-900 mb-1">{c.name}</h3>
+                            <p className="text-sm text-gray-600 mb-2">{c.address}</p>
+                            <div className="flex items-center gap-2 text-sm text-teal-600">
+                              <Phone className="w-4 h-4" />
+                              <span className="font-semibold">{c.phone}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Vắc-xin */}
+              <div>
+                <label className="block text-xl font-bold mb-4 flex items-center gap-2">
+                  <Shield className="w-6 h-6 text-teal-600" />
+                  Loại vắc-xin <span className="text-red-500">*</span>
+                </label>
+                {loading ? (
+                  <div className="text-center py-8">
+                    <Loader2 className="w-8 h-8 animate-spin mx-auto text-teal-600" />
+                  </div>
+                ) : vaccines.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    Không có vắc-xin nào
+                  </div>
+                ) : (
+                  <div className="grid md:grid-cols-2 gap-4">
                     {vaccines.map(v => (
                       <div
                         key={v.id}
@@ -368,35 +465,62 @@ export default function QuickBookingPage() {
                         className={`group relative overflow-hidden p-6 border-3 rounded-2xl cursor-pointer transition-all duration-300 transform hover:scale-105 ${
                           form.vaccineId == v.id
                             ? 'border-teal-500 bg-gradient-to-br from-teal-50 to-cyan-50 shadow-2xl ring-4 ring-teal-300'
-                            : 'border-gray-300 bg-white hover:border-teal-400 hover:shadow-xl'
+                            : 'border-teal-400 bg-white hover:border-teal-300 hover:shadow-xl'
                         }`}
                       >
+                        {/* Background Pattern */}
+                        <div className={`absolute inset-0 opacity-5 transition-opacity ${
+                          form.vaccineId == v.id ? 'opacity-10' : 'opacity-0 group-hover:opacity-5'
+                        }`}>
+                          <div className="absolute inset-0" style={{
+                            backgroundImage: 'radial-gradient(circle, #14b8a6 1px, transparent 1px)',
+                            backgroundSize: '20px 20px'
+                          }}></div>
+                        </div>
+
+                        {/* Selected Badge */}
                         {form.vaccineId == v.id && (
-                          <div className="absolute top-3 right-3 w-9 h-9 bg-teal-600 rounded-full flex items-center justify-center shadow-lg animate-bounce">
-                            <CheckCircle className="w-6 h-6 text-white" />
+                          <div className="absolute top-3 right-3 w-8 h-8 bg-teal-600 rounded-full flex items-center justify-center shadow-lg animate-bounce">
+                            <CheckCircle className="w-5 h-5 text-white" />
                           </div>
                         )}
 
-                        <div className="flex items-start gap-4">
-                          <div className={`w-16 h-16 rounded-2xl flex-shrink-0 flex items-center justify-center ${
-                            form.vaccineId == v.id
-                              ? 'bg-gradient-to-br from-teal-600 to-cyan-600'
+                        <div className="relative flex items-start gap-4">
+                          {/* Icon Container */}
+                          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center flex-shrink-0 transition-all duration-300 ${
+                            form.vaccineId == v.id 
+                              ? 'bg-gradient-to-br from-teal-600 to-cyan-600 shadow-lg' 
                               : 'bg-gradient-to-br from-teal-100 to-cyan-100 group-hover:from-teal-200 group-hover:to-cyan-200'
                           }`}>
-                            <Shield className={`w-9 h-9 ${form.vaccineId == v.id ? 'text-white' : 'text-teal-600'}`} />
+                            <Shield className={`w-8 h-8 transition-colors ${
+                              form.vaccineId == v.id ? 'text-white' : 'text-teal-600'
+                            }`} />
                           </div>
-                          <div className="flex-1">
-                            <h3 className={`font-bold text-lg ${form.vaccineId == v.id ? 'text-teal-900' : 'text-gray-900'}`}>
+
+                          {/* Content */}
+                          <div className="flex-1 min-w-0">
+                            <h3 className={`text-lg font-bold mb-1 transition-colors line-clamp-2 ${
+                              form.vaccineId == v.id ? 'text-teal-900' : 'text-gray-900'
+                            }`}>
                               {v.name}
                             </h3>
-                            <p className="text-sm text-gray-600 mb-3">{v.manufacturer}</p>
-                            <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl font-bold rounded-xl ${
+                            <p className="text-sm text-gray-600 mb-3 flex items-center gap-1">
+                              <span className={`w-2 h-2 rounded-full ${
+                                form.vaccineId == v.id ? 'bg-teal-500' : 'bg-gray-400'
+                              }`}></span>
+                              {v.manufacturer}
+                            </p>
+
+                            {/* Price Tag */}
+                            <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl font-bold transition-all ${
                               form.vaccineId == v.id
-                                ? 'bg-teal-600 text-white'
-                                : 'bg-teal-50 text-teal-700'
+                                ? 'bg-teal-600 text-white shadow-lg'
+                                : 'bg-gradient-to-r from-teal-50 to-cyan-50 text-teal-700 group-hover:from-teal-100 group-hover:to-cyan-100'
                             }`}>
                               <DollarSign className="w-5 h-5" />
-                              {Number(v.price).toLocaleString()}đ
+                              <span className="text-xl">
+                                {Number(v.price).toLocaleString()}đ
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -407,17 +531,22 @@ export default function QuickBookingPage() {
               </div>
 
               <div className="flex gap-4">
-                <button onClick={() => navigate(-1)}
-                  className="flex-1 py-4 border-2 border-gray-300 rounded-2xl font-bold text-lg hover:bg-gray-50 transition flex items-center justify-center gap-2">
+                <button
+                  onClick={prevStep}
+                  className="flex-1 py-4 border-2 border-gray-300 rounded-2xl font-bold text-lg hover:bg-gray-50 transition flex items-center justify-center gap-2"
+                >
                   <ChevronLeft className="w-5 h-5" /> Quay lại
                 </button>
-                <button onClick={nextStep}
-                  className="flex-1 bg-gradient-to-r from-teal-600 to-cyan-600 text-white py-4 rounded-2xl font-bold text-lg hover:shadow-xl transition flex items-center justify-center gap-2">
+                <button
+                  onClick={nextStep}
+                  className="flex-1 bg-gradient-to-r from-teal-600 to-cyan-600 text-white py-4 rounded-2xl font-bold text-lg hover:shadow-xl transition flex items-center justify-center gap-2"
+                >
                   Chọn ngày giờ <ChevronRight className="w-5 h-5" />
                 </button>
               </div>
             </div>
           )}
+
           {/* STEP 3: CHỌN NGÀY & GIỜ */}
           {step === 3 && (
             <div className="space-y-8">

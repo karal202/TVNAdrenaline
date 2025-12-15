@@ -135,9 +135,20 @@ export default function AdminDashboard() {
               <ResponsiveContainer width="100%" height={300}>
                 <LineChart data={stats?.weeklyStats || []}>
                   <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
+                  <XAxis 
+                    dataKey="date" 
+                    tickFormatter={(value) => {
+                      const date = new Date(value);
+                      return `${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}`;
+                    }}
+                  />
                   <YAxis />
-                  <Tooltip />
+                  <Tooltip 
+                    labelFormatter={(value) => {
+                      const date = new Date(value);
+                      return `${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}`;
+                    }}
+                  />
                   <Legend />
                   <Line type="monotone" dataKey="count" stroke="#14b8a6" strokeWidth={3} name="Số lượng" />
                 </LineChart>

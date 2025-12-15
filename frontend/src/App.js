@@ -6,12 +6,15 @@ import { Toaster } from 'react-hot-toast';
 // === USER PAGES ===
 import HomePage from './pages/User/HomePage';
 import LoginPage from './pages/User/LoginPage';
-import DashboardPage from './pages/User/DashboardPage';
 import UserPage from './pages/User/UserPage';
 import BookingPage from './pages/User/BookingPage';
 import QuickBookingPage from './pages/User/QuickBookingPage';
 import MyBookingsPage from './pages/User/MyBookingsPage';
 import NotificationsPage from './pages/User/NotificationsPage';
+import PaymentPage from './pages/User/PaymentPage';
+import PaymentFailedPage from './pages/User/Paymentfailurepage';
+import PaymentsuccessPage from './pages/User/Paymentsuccesspage';
+import MySessionsPage from './pages/User/MySessionsPage';
 
 // === STAFF PAGES ===
 import StaffDashboardPage from './pages/Staff/StaffDashboardPage';
@@ -67,12 +70,15 @@ function App() {
           {/* User Routes */}
           <Route path="/" element={<HomePage />} />
           <Route path="/login" element={<LoginPage />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/profile" element={<UserPage />} />
           <Route path="/booking" element={<BookingPage />} />
           <Route path="/booking/:centerId" element={<QuickBookingPage />} />
           <Route path="/my-bookings" element={<MyBookingsPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
+          <Route path="/payment/:bookingId" element={<PaymentPage />} />
+          <Route path="/payment/success" element={<PaymentsuccessPage />} />
+          <Route path="/payment/failure" element={<PaymentFailedPage />} />
+          <Route path="/my-sessions" element={<MySessionsPage />} />
 
           {/* Staff Routes */}
           <Route path="/staff/dashboard" element={<StaffDashboardPage />} />

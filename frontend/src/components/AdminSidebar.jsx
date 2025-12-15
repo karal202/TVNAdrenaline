@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, Users, UserCog, Building2, 
   Syringe, Calendar, Bell, Settings, 
-  LogOut, ChevronRight, Activity
+  LogOut, ChevronRight, Activity, Shield
 } from 'lucide-react';
 import { logout, getCurrentUser } from '../utils/api';
 import toast from 'react-hot-toast';
@@ -71,7 +71,7 @@ export default function AdminSidebar() {
       <div className="p-6 border-b border-gray-700">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-12 h-12 bg-gradient-to-br from-teal-400 to-cyan-500 rounded-2xl flex items-center justify-center">
-            <Activity className="w-7 h-7 text-white" />
+            <Shield className="w-7 h-7 text-white" />
           </div>
           <div>
             <h1 className="text-xl font-bold">TVN Adrenaline</h1>
